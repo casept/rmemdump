@@ -5,4 +5,5 @@ edition = "2021"
 
 [dependencies]
 indicatif = "0.17.9"
+lz4 = "1.28.0"
 memmap2 = "0.9.5"

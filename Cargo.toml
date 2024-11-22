@@ -4,6 +4,20 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+clap = { version = "4.5.21", default-features = false, features = [
+    "std",
+    "derive",
+    "help",
+    "usage",
+] }
 indicatif = "0.17.9"
 lz4 = "1.28.0"
 memmap2 = "0.9.5"
+
+# Optimize for size
+[profile.release]
+lto = "fat"
+panic = "abort"
+opt-level = "z"
+[profile.release.package.lz4]
+opt-level = 3

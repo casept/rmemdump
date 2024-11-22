@@ -1,36 +1,42 @@
+use clap::Parser;
 use indicatif::{ProgressBar, ProgressStyle};
 use memmap2::{Advice, Mmap, MmapOptions};
 use std::cmp::min;
-use std::env;
 use std::fs::File;
 use std::io::Write;
+use std::num::ParseIntError;
+use std::str::FromStr;
 
 const MAX_CHUNK_LEN: usize = 512 * 1024;
 
-fn parse_num(s: &str) -> usize {
-    let s = s.trim();
-    if let Some(stripped) = s.strip_prefix("0x") {
-        usize::from_str_radix(stripped, 16).unwrap()
-    } else {
-        s.parse().unwrap()
+/// Newtype so we can easily parse hex digits
+#[derive(Debug, Clone, Copy)]
+struct Size(usize);
+
+impl FromStr for Size {
+    type Err = ParseIntError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let s = s.trim();
+        let (stripped, base) = match s.strip_prefix("0x") {
+            Some(s) => (s, 16),
+            None => (s, 10),
+        };
+        usize::from_str_radix(stripped, base).map(Size)
     }
 }
 
-fn parse_cmdline() -> (usize, usize, String, bool) {
-    let args: Vec<String> = env::args().collect();
-    if args.len() != 4 {
-        eprintln!("Usage: {} <start_addr> <count_bytes> <outfile>", args[0]);
-        eprintln!("Note: If <outfile> ends on .lz4, compression will be activated (LZ4 level 1)");
-
-        std::process::exit(1);
-    }
-
-    let start_addr = parse_num(&args[1]);
-    let count_bytes = parse_num(&args[2]);
-    let outfile = args[3].clone();
-    let compress = outfile.ends_with(".lz4");
-
-    (start_addr, count_bytes, outfile, compress)
+#[derive(Parser)]
+#[command(version, about, long_about = None)]
+struct Cli {
+    /// Address to start dumping memory at
+    start_addr: Size,
+    /// How much to dump (in bytes)
+    count_bytes: Size,
+    /// Output file
+    outfile: String,
+    /// Compress output file with LZ4 (level 1)
+    #[arg(short, long)]
+    compress: bool,
 }
 
 fn save_chunk(mmap: &Mmap, start: usize, end: usize, dest: &mut dyn Write) {
@@ -89,6 +95,10 @@ fn dump(start: usize, count: usize, out_file: &str, compress: bool) {
 }
 
 fn main() {
-    let (start_addr, count_bytes, out_file, compress) = parse_cmdline();
+    let cli = Cli::parse();
+    let start_addr = cli.start_addr.0;
+    let count_bytes = cli.count_bytes.0;
+    let out_file = cli.outfile;
+    let compress = cli.compress;
     dump(start_addr, count_bytes, &out_file, compress);
 }

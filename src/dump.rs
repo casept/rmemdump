@@ -1,16 +1,19 @@
 use indicatif::{ProgressBar, ProgressStyle};
 use memmap2::{Advice, Mmap, MmapOptions};
+use rayon::prelude::*;
 use std::cmp::min;
 use std::fs::File;
 use std::io::Write;
+use std::sync::Mutex;
 
-const MAX_CHUNK_LEN: usize = 512 * 1024;
+use crate::incremental::Incremental;
 
 pub struct Dumper {
     start: usize,
     count: usize,
     compress: bool,
     mmap: Mmap,
+    incr: Mutex<Option<Incremental>>,
 }
 
 impl Dumper {
@@ -25,7 +28,36 @@ impl Dumper {
             count,
             compress,
             mmap,
+            incr: Mutex::from(None),
         }
+    }
+
+    pub fn dump_incremental(&mut self, out_file: &str) {
+        self.incr = Mutex::from(Some(Incremental::new(self.compress, out_file)));
+        loop {
+            let start_time = std::time::Instant::now();
+            // Iterate in parallel via rayon over chunks, mainly to distribute hashing across cores
+            self.mmap[self.start..self.start + self.count]
+                .par_chunks(crate::MAX_CHUNK_LEN)
+                .for_each(|chunk| {
+                    let hash = Incremental::hash_chunk(chunk);
+                    let mut incr_lock = self.incr.lock();
+                    let incr = incr_lock.as_mut().unwrap().as_mut().unwrap();
+                    incr.add_hashed_chunk(&chunk, hash);
+                    drop(incr_lock);
+                });
+            let elapsed = start_time.elapsed();
+            println!(
+                "Took {} ns / {} ms",
+                elapsed.as_nanos(),
+                elapsed.as_millis()
+            );
+            let mut incr = self.incr.lock();
+            let incr = incr.as_mut().unwrap().as_mut().unwrap();
+            incr.print_stats();
+            incr.new_generation();
+        }
+        // self.incr.as_mut().unwrap().flush();
     }
 
     fn save_chunk(&mut self, start: usize, end: usize, dest: &mut dyn Write) {
@@ -33,7 +65,8 @@ impl Dumper {
         std::io::copy(&mut src, dest).unwrap();
     }
 
-    pub fn dump(&mut self, out_file: &str) {
+    /// Save a full dump of memory to a file, one-to-one
+    pub fn dump_full(&mut self, out_file: &str) {
         let mut pos: usize = self.start;
         let end = self.start + self.count;
         let mut out = File::create(out_file).unwrap();
@@ -50,7 +83,7 @@ impl Dumper {
 
         while pos < end {
             // Read in chunks to avoid exhausting memory
-            let chunk_len = min(MAX_CHUNK_LEN, end - pos);
+            let chunk_len = min(crate::MAX_CHUNK_LEN, end - pos);
             let chunk_start = pos;
             let chunk_end = pos + chunk_len;
 
